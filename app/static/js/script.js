@@ -85,6 +85,9 @@ function renderPage(page) {
     case 'report':            
       showReport();           
       break;
+    case 'oltConfigBridge':            
+      renderConfigBridge();           ``
+      break;
     default:
       mainContent.innerHTML = `<h1>Dashboard</h1>`;
   }
@@ -1278,4 +1281,357 @@ function showReport() {
   loadReportData();
 }
 
+// ----------------------------- CONFIG BRIDGE --------------------------
 
+// Fungsi pembuat template form untuk Bridge
+function generateBridgeFormHTML() {
+  return `
+    <h1>Form Config Bridge</h1>
+    <div class="layout-container">
+      <div class="card form-card">
+        <form id="configBridgeForm">
+          <!-- Select OLT -->
+          <div class="form-group">
+            <label for="oltSelect">Pilih OLT</label>
+            <select id="oltSelect" name="olt" required>
+              <option value="">Pilih OLT</option>
+            </select>
+          </div>
+
+          <!-- Select SN -->
+          <div class="form-group">
+            <label for="snSelect">Pilih Serial Number (SN) ONT:</label>
+            <select id="snSelect" name="sn" required>
+              <option value="">Pilih SN</option>
+            </select>
+          </div>
+
+          <!-- Jenis Modem -->
+          <div class="form-group">
+            <label for="jenisModem">Jenis Modem</label>
+            <select id="jenisModem" name="jenisModem" required>
+              <option value="">Pilih Modem</option>
+            </select>
+          </div>
+
+          <!-- Upload & Download Speed -->
+          <div class="form-group horizontal-group">
+            <div class="form-subgroup">
+              <label for="uploadSpeed">Upload Speed (Mbps)</label>
+              <select id="uploadSpeed" name="uploadSpeed" required>
+                <option value="">Profile Tcont</option>
+              </select>
+            </div>
+            <div class="form-subgroup">
+              <label for="downloadSpeed">Download Speed (Mbps)</label>
+              <select id="downloadSpeed" name="downloadSpeed" required>
+                <option value="">Profile Trafick</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Nama -->
+          <div class="form-group">
+            <label for="namaPelanggan">Nama</label>
+            <input type="text" id="namaPelanggan" name="namaPelanggan" placeholder="Nama Pelanggan" required>
+          </div>
+
+            <!-- VLAN -->
+          <div class="form-group">
+            <label for="namaPelanggan">VLAN</label>
+            <input type="text" id="vlanBridge" name="vlanBridge" placeholder="Vlan ID" required>
+          </div>
+
+          <!-- Alamat -->
+          <div class="form-group full-width-textarea">
+            <label for="alamatPelanggan">Alamat</label>
+            <textarea id="alamatPelanggan" name="alamatPelanggan" placeholder="Alamat lengkap..." rows="4" required></textarea>
+          </div>
+
+          <button class="tombol-simpan">Proses</button>
+        </form>
+      </div>
+
+      <!-- Kolom Kanan -->
+      <div class="card table-card">
+        <div class="card" id="hasilCard" style="white-space:pre-wrap; padding:1rem;">
+          Hasil config akan tampil di sini...
+        </div>
+        <div id="cardKanan"></div>
+      </div>
+    </div>
+  `;
+}
+
+// Fungsi render config bridge
+async function renderConfigBridge() {
+  mainContent.innerHTML = generateBridgeFormHTML();
+  await initOLTAndSNHandlers({
+    oltSelectId: 'oltSelect',
+    snSelectId: 'snSelect',
+    jenisModemSelectId: 'jenisModem',
+    uploadSelectId: 'uploadSpeed',
+    downloadSelectId: 'downloadSpeed',
+    tableCardSelector: '.table-card'
+  });
+  // setelah form di-render, di sini tinggal isi select OLT, SN, Modem dsb. pakai fetch/JS
+  // contoh event listener submit:
+  document.getElementById('configBridgeForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const formData = new FormData(e.target);
+    const payload = Object.fromEntries(formData.entries());
+    console.log('Payload Bridge:', payload);
+
+    // panggil backend untuk konfigurasi bridge sesuai kebutuhan
+    // const response = await fetch('/api/config_bridge', {method:'POST', body:JSON.stringify(payload)});
+    // const result = await response.json();
+    // document.getElementById('hasilCard').textContent = JSON.stringify(result, null, 2);
+  });
+
+
+  // fungsi inisialisasi OLT, SN, profil, dsb. supaya reusable
+async function initOLTAndSNHandlers({
+  oltSelectId = 'oltSelect',
+  snSelectId = 'snSelect',
+  jenisModemSelectId = 'jenisModem',
+  uploadSelectId = 'uploadSpeed',
+  downloadSelectId = 'downloadSpeed',
+  tableCardSelector = '.table-card'
+} = {}) {
+  // variabel mapping SN->Port
+  let snToPort = {};
+
+  // muat daftar OLT
+  try {
+    const res = await fetch('/api/list_olt');
+    const data = await res.json();
+    const select = document.getElementById(oltSelectId);
+    select.innerHTML = `<option value="">-- Pilih OLT --</option>`;
+    data.forEach(item => {
+      const option = document.createElement('option');
+      option.value = item.id_olt;
+      option.textContent = `${item.alamat_pop} - ${item.ip_address}`;
+      option.dataset.jenis = item.jenis_olt;
+      option.dataset.vlan = item.vlan;
+      select.appendChild(option);
+    });
+
+    // handler saat user pilih OLT
+    select.addEventListener('change', async (event) => {
+      const id_olt = event.target.value;
+      const selectedOption = event.target.selectedOptions[0];
+      const jenis_olt = selectedOption ? selectedOption.dataset.jenis : '';
+
+      const jenisModemSelect = document.getElementById(jenisModemSelectId);
+      const uploadSelect = document.getElementById(uploadSelectId);
+      const downloadSelect = document.getElementById(downloadSelectId);
+      const snSelect = document.getElementById(snSelectId);
+
+      jenisModemSelect.innerHTML = `<option>Memuat data ONU type...</option>`;
+      uploadSelect.innerHTML = `<option>Memuat profile upload...</option>`;
+      downloadSelect.innerHTML = `<option>Memuat profile download...</option>`;
+      snSelect.innerHTML = `<option>Memuat SN...</option>`;
+
+      if (!id_olt) return;
+
+      try {
+        // ambil profiles & ONU types
+        const res = await fetch('/api/show_profiles_and_onu', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id_olt })
+        });
+        const result = await res.json();
+        if (!res.ok) {
+          alert(result.error || 'Gagal ambil data');
+          return;
+        }
+
+        // isi jenis modem
+        jenisModemSelect.innerHTML = `<option value="">-- Pilih Jenis Modem --</option>`;
+        result.onu_types.forEach(type => {
+          const option = document.createElement('option');
+          option.value = type;
+          option.textContent = type;
+          jenisModemSelect.appendChild(option);
+        });
+
+        // isi upload profiles
+        uploadSelect.innerHTML = `<option value="">-- Profile Tcont --</option>`;
+        result.upload_profiles.forEach(profile => {
+          const option = document.createElement('option');
+          option.value = profile;
+          option.textContent = profile;
+          uploadSelect.appendChild(option);
+        });
+
+        // isi download profiles
+        downloadSelect.innerHTML = `<option value="">-- Profile Trafick --</option>`;
+        result.download_profiles.forEach(profile => {
+          const option = document.createElement('option');
+          option.value = profile;
+          option.textContent = profile;
+          downloadSelect.appendChild(option);
+        });
+
+        // SN + Port OLT
+        const snRes = await fetch('/api/show_uncfg_onu', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id_olt, jenis_olt })
+        });
+        const snResult = await snRes.json();
+
+        if (snRes.ok) {
+          snSelect.innerHTML = `<option value="">-- Pilih SN --</option>`;
+          snToPort = {}; // reset mapping
+          snResult.sn_list.forEach((sn, i) => {
+            const option = document.createElement('option');
+            option.value = sn;
+            option.textContent = sn;
+            snSelect.appendChild(option);
+            snToPort[sn] = snResult.index_list[i]; // buat mapping
+          });
+
+          // tampilkan daftar SN + Port OLT di card kanan
+          const tableCard = document.querySelector(tableCardSelector);
+          let html = `<h3>Daftar SN & Port OLT (OnuIndex)</h3><ul>`;
+          snResult.index_list.forEach((idx, i) => {
+            html += `<li><strong>${snResult.sn_list[i]}</strong> ➡️ Port: ${idx}</li>`;
+          });
+          html += `</ul>`;
+          tableCard.innerHTML = html;
+
+        } else {
+          alert(snResult.error || 'Gagal ambil SN');
+        }
+
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
+    // handler saat user pilih SN tertentu
+    document.getElementById(snSelectId).addEventListener('change', async (event) => {
+      const selectedSn = event.target.value;
+      if (!selectedSn) return;
+      const portWithIndex = snToPort[selectedSn]; // contoh "1/3/3:1"
+      const portOnly = portWithIndex.split(':')[0]; // contoh "1/3/3"
+
+      // tampilkan loading awal di card kanan
+      const tableCard = document.querySelector(tableCardSelector);
+      tableCard.innerHTML = `
+        <h3>Informasi SN Terpilih</h3>
+        <p><strong>SN:</strong> ${selectedSn}</p>
+        <p><strong>Port:</strong> ${portWithIndex}</p>
+        <p>Memeriksa slot kosong...</p>
+      `;
+
+      const oltSelect = document.getElementById(oltSelectId);
+      const id_olt = oltSelect.value;
+      const jenis_olt = oltSelect.selectedOptions[0].dataset.jenis;
+
+      try {
+        const res = await fetch('/api/check_empty_onu', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id_olt, jenis_olt, port_olt: portOnly })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          tableCard.innerHTML = `
+            <h3>Informasi SN Terpilih</h3>
+            <p><strong>SN:</strong> ${selectedSn}</p>
+            <p><strong>Port:</strong> ${portWithIndex}</p>
+            <p><strong>ONU berikutnya:</strong> ${data.next_onu || 'penuh'}</p>
+            <small style="color:#888">Slot terpakai: ${data.used_onu.join(', ')}</small>
+          `;
+        } else {
+          tableCard.innerHTML += `<p style="color:red">${data.error}</p>`;
+        }
+      } catch (err) {
+        console.error(err);
+        tableCard.innerHTML += `<p style="color:red">Gagal memeriksa slot kosong</p>`;
+      }
+    });
+
+  } catch (err) {
+    console.error('Gagal memuat daftar OLT:', err);
+  }
+}
+
+// ------------------------ TOMBOL PROSES BRIDGE ------------------------------
+
+document.getElementById('configBridgeForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  const oltSelect = document.getElementById('oltSelect');
+  const id_olt = oltSelect.value;
+  const jenis_olt = oltSelect.selectedOptions[0].dataset.jenis;
+  const selectedSn = document.getElementById('snSelect').value;
+
+  const infoCard = document.querySelector('.table-card');
+  let port_base = '';
+  let onu_num = '';
+
+  if (infoCard) {
+    const pList = infoCard.querySelectorAll('p');
+    pList.forEach(p => {
+      const text = p.textContent;
+      if (text.includes('Port:')) {
+        port_base = text.split('Port:')[1].trim();
+      }
+      if (text.includes('ONU berikutnya:')) {
+        onu_num = text.split('ONU berikutnya:')[1].trim();
+        if (onu_num === 'penuh') onu_num = '';
+      }
+    });
+  }
+
+  const payload = {
+    id_olt,
+    jenis_olt,
+    port_base,
+    onu_num,
+    jenis_modem: document.getElementById('jenisModem').value,
+    sn: selectedSn,
+    nama_pelanggan: document.getElementById('namaPelanggan').value,
+    alamat: document.getElementById('alamatPelanggan').value,
+    upload_profile: document.getElementById('uploadSpeed').value,
+    download_profile: document.getElementById('downloadSpeed').value,
+    vlan: document.getElementById('vlanBridge').value,   // VLAN input form
+    pppoe_username: "",   // kosong kalau bridge
+    pppoe_password: "",   // kosong kalau bridge
+    lock: ""              // kosong kalau bridge
+  };
+
+  // tampilkan payload
+  infoCard.innerHTML = `
+    <h3>Mengirim Data Config Bridge...</h3>
+    <pre>${JSON.stringify(payload, null, 2)}</pre>
+  `;
+
+  try {
+    const res = await fetch('/api/config_onu_bridge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (res.ok) {
+      infoCard.innerHTML = `
+        <h3>Hasil Config Bridge dari OLT</h3>
+        <p>Kode PSB: <strong>${data.kode_psb}</strong></p>
+        <pre>${data.output}</pre>
+      `;
+    } else {
+      infoCard.innerHTML += `<p style="color:red">Gagal config: ${data.error || 'Unknown error'}</p>`;
+    }
+  } catch (err) {
+    console.error(err);
+    infoCard.innerHTML += `<p style="color:red">Error koneksi ke server</p>`;
+  }
+});
+
+}

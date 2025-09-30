@@ -71,52 +71,6 @@ async def telnet_login(olt_data):
     return reader, writer
 
 # ------------------------ DO TELNET (SHOW PROFILES) ------------------------
-
-# async def do_telnet(olt_data):
-#     reader, writer = await telnet_login(olt_data)
-
-#     # Upload profiles
-#     tcont_output = await read_all_output(reader, writer, "show gpon profile tcont")
-#     upload_result = ["UPLOAD (T-CONT Profile) :"]
-#     blocks = tcont_output.split("Profile name")
-#     for block in blocks[1:]:
-#         lines = block.strip().splitlines()
-#         if lines:
-#             name = lines[0].replace(":", "").strip()
-#             upload_result.append(name)
-
-#     # Download profiles hanya untuk C300
-#     download_result = []
-#     if olt_data.get('jenis_olt') == 'C300':
-#         traffic_output = await read_all_output(
-#             reader,
-#             writer,
-#             "show gpon profile traffic",
-#             max_wait=180,
-#             idle_timeout=8
-#         )
-#         download_result = ["\nDOWNLOAD (Traffic Profile) :"]
-#         pattern = re.compile(r"profile name\s*:\s*(\S+)", re.IGNORECASE)
-#         for match in pattern.finditer(traffic_output):
-#             download_result.append(match.group(1))
-#     else:
-#         download_result = ["\nDOWNLOAD (Traffic Profile) : Tidak didukung jenis OLT ini"]
-
-#     writer.write("exit\n")
-#     await asyncio.sleep(0.5)
-#     writer.close()
-
-#     return "\n".join(upload_result + [""] + download_result)
-
-
-#     # Tutup koneksi
-#     writer.write("exit\n")
-#     await asyncio.sleep(0.5)
-#     writer.close()
-
-#     return "\n".join(upload_result + [""] + download_result)
-
-# ------------------------ DO TELNET (SHOW PROFILES) ------------------------
 async def do_telnet(olt_data):
     reader, writer = await telnet_login(olt_data)
 
@@ -317,44 +271,6 @@ async def telnet_show_uncfg_onu(olt_data, jenis_olt):
 
     return {"sn_list": sn_list, "index_list": index_list}
 
-
-# async def telnet_show_uncfg_onu(olt_data, jenis_olt):
-#     reader, writer = await telnet_login(olt_data)
-
-#     if jenis_olt.upper() in ["C300", "C320"]:
-#         command = "show gpon onu uncfg"
-#     elif jenis_olt.upper() == "C600":
-#         command = "show pon onu uncfg"
-#     else:
-#         command = "show gpon onu uncfg"
-
-#     output = await read_all_output(reader, writer, command, max_wait=120, idle_timeout=5)
-
-#     writer.write("exit\n")
-#     await asyncio.sleep(0.5)
-#     writer.close()
-
-#     # Parsing SN + OnuIndex
-#     sn_list = []
-#     index_list = []
-#     for line in output.splitlines():
-#         line = line.strip()
-#         if line.startswith("gpon-onu") or line.startswith("pon-onu"):
-#             parts = line.split()
-#             if len(parts) >= 2:
-#                 # contoh parts[0] = gpon-onu_1/3/3:1
-#                 # ambil yang di antara _ dan : supaya hasilnya 1/3/3
-#                 raw_index = parts[0]
-#                 try:
-#                     inner = raw_index.split("_", 1)[1]  # 1/3/3:1
-#                     onu_index = inner.split(":", 1)[0]  # 1/3/3
-#                 except Exception:
-#                     onu_index = ""
-
-#                 sn_list.append(parts[1])
-#                 index_list.append(onu_index)
-
-#     return {"sn_list": sn_list, "index_list": index_list}
 
 # ------------------- FUNGSI GET ONU IDLE -----------------------
 
@@ -565,21 +481,121 @@ async def telnet_show_profiles(olt_data):
     tn.close()
     return output
 
-# -------------------------------------------------------------------
-# buat jika radio lock di tekan di frontend sebelum button proses selipkan config kunci
-# di bawah pon-mng
-# await send(f"pon-onu-mng gpon-onu_{port_base}:{onu_num}")
-# untuk mengunci lan
-# await send("interface eth eth_0/1 state lock")
-# await send("interface eth eth_0/2 state lock")
-# await send("interface eth eth_0/3 state lock")
-# await send("interface eth eth_0/4 state lock")
-# boleh juga jika buttun unlock di isi
-# await send("interface eth eth_0/1 state unlock")
-# await send("interface eth eth_0/2 state unlock")
-# await send("interface eth eth_0/3 state unlock")
-# await send("interface eth eth_0/4 state unlock")
-# walaupun sejak awal pasti sudah unlock tidak di beri config unlock sekalipun
-# tapi biarkan begitu biar menjadi petunjuk untuk user 
+# ---------------- CONFIG ONU BRIDGE -----------------
 
-# ini berlaku sama untuk c600 dan 300 buat modifikas
+async def config_onu_bridge_telnet(
+    olt_data, jenis_olt, port_base, onu_num,
+    modem_type, sn, nama, alamat,
+    upload_profile, download_profile, vlan
+):
+    reader, writer = await telnet_login(olt_data)
+
+    # helper kirim command Telnet
+    async def send(cmd, wait=0.5):
+        if not isinstance(cmd, str):
+            cmd = str(cmd)
+        writer.write(cmd + "\n")
+        await writer.drain()
+        await asyncio.sleep(wait)
+
+    if jenis_olt.upper() == "C600":
+        # === PERINTAH C600 ===
+        await send("conf t")
+        await send(f"interface gpon_olt-{port_base}")
+        await send(f"onu {onu_num} type {modem_type} sn {sn}")
+        await send("exit")
+
+        await send(f"interface gpon_onu-{port_base}:{onu_num}")
+        await send(f"name {nama}")
+        await send(f"description {alamat}")
+        await send(f"tcont 1 name CIGNAL profile {upload_profile}")
+        await send(f"gemport 1 name CIGNAL tcont 1")
+        await send("exit")
+
+        await send(f"interface vport-{port_base}.{onu_num}:1")
+        await send(f"service-port 1 user-vlan {vlan} vlan {vlan}")
+        await send(f"qos traffic-policy {download_profile} direction egress")
+        await send("exit")
+
+        await send(f"pon-onu-mng gpon_onu-{port_base}:{onu_num}")
+        await send(f"service CIGNAL gemport 1 vlan {vlan}")
+        for i in range(1, 5):
+            await send(f"vlan port eth_0/{i} mode tag vlan {vlan}")
+        await send("exit")
+
+    else:
+        # === PERINTAH C300 / C320 ===
+        await send("conf t")
+        await send(f"interface gpon-olt_{port_base}")
+        await send(f"onu {onu_num} type {modem_type} sn {sn} vport-mode gemport")
+        await send("exit")
+
+        await send(f"interface gpon-onu_{port_base}:{onu_num}")
+        await send(f"name {nama}")
+        await send(f"description {alamat}")
+        await send(f"tcont 1 name BRIDGE profile {upload_profile}")
+        await send(f"gemport 1 name BRIDGE tcont 1")
+        await send(f"gemport 1 traffic-limit downstream {download_profile}")
+        await send(f"service-port 1 vport 1 user-vlan {vlan} vlan {vlan}")
+        await send(f"port-identification format DSL-FORUM-PON vport 1")
+        await send(f"pppoe-intermediate-agent enable vport 1")
+        await send("exit")
+
+        await send(f"pon-onu-mng gpon-onu_{port_base}:{onu_num}")
+        await send(f"service BRIDGE gemport 1 vlan {vlan}")
+        for i in range(1, 5):
+            await send(f"vlan port eth_0/{i} mode tag vlan {vlan}")
+        await send("exit")
+
+    # tunggu output OLT
+    await asyncio.sleep(1)
+    logs = await read_all_output(reader, writer, "", max_wait=5)
+
+    # tutup session
+    await send("end", wait=0.5)
+    await send("exit", wait=0.5)
+    writer.close()
+
+    return logs
+
+
+# if jenis_olt.upper() == "C600":
+#     interface gpon_{port_base}
+#     onu {onu_num} type {modem_type} sn {sn}
+#     exit
+#     interface gpon_onu-{port_base}:{onu_num}
+#     name {nama}
+#     description {alamat}
+#     tcont 1 name CIGNAL profile {upload_profile}
+#     gemport 1 name CIGNAL tcont 1
+#     exit
+#     interface vport-{port_base}.{onu_num}:1
+#     service-port 1 user-vlan {vlan} vlan {vlan}
+#     qos traffic-policy {download_profile} direction egress
+#     exit
+#     pon-onu-mng gpon_onu-{port_base}:{onu_num}
+#     service CIGNAL gemport 1 vlan {vlan}
+#     vlan port eth_0/1 mode tag vlan {vlan}
+#     vlan port eth_0/2 mode tag vlan {vlan} 
+#     vlan port eth_0/3 mode tag vlan {vlan} 
+#     vlan port eth_0/4 mode tag vlan {vlan} 
+# else
+#     interface gpon-olt_{port_base}
+#     onu {onu_num} type {modem_type} sn {sn} vport-mode gemport
+#     exit
+#     interface gpon-onu_{port_base}:{onu_num}
+#     name {nama}
+#     description {alamat}
+#     tcont 1 name PPPOE profile {upload_profile}
+#     gemport 1 name PPPOE tcont 1
+#     gemport 1 traffic-limit downstream {download_profile}
+#     service-port 1 vport 1 user-vlan {vlan} vlan {vlan} 
+#     port-identification format DSL-FORUM-PON vport 1
+#     pppoe-intermediate-agent enable vport 1
+#     exit
+#     pon-onu-mng gpon-onu_{port_base}:{onu_num}
+#     service BRIDGE gemport 1 vlan {vlan}
+#     vlan port eth_0/1 mode tag vlan {vlan}
+#     vlan port eth_0/2 mode tag vlan {vlan}
+#     vlan port eth_0/3 mode tag vlan {vlan}
+#     vlan port eth_0/4 mode tag vlan {vlan}

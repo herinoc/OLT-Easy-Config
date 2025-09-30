@@ -7,7 +7,7 @@ from app.models import get_olt_by_id  # kamu bisa ganti dengan DB query
 import asyncio
 from datetime import datetime
 import random, string
-from app.olt.remote_olt import telnet_show_uncfg_onu, telnet_show_onu_state, config_onu_telnet
+from app.olt.remote_olt import telnet_show_uncfg_onu, telnet_show_onu_state, config_onu_telnet, config_onu_bridge_telnet
 
 # from app.olt.remote_olt import proses_limitasi
 # from app.olt.remote_olt import do_telnet, read_command  # pastikan impor sesuai lokasi kamu
@@ -409,50 +409,6 @@ def show_onu_state():
 
 # -------------------------- ENDPOINT CONFIG PROSES --------------------------
 
-# @main.route('/api/config_onu', methods=['POST'])
-# def config_onu():
-#     data = request.get_json(force=True)
-#     current_app.logger.info(f"Payload diterima: {data}")
-
-#     id_olt = data.get('id_olt')
-#     jenis_olt = data.get('jenis_olt')
-#     port_base = data.get('port_base')
-#     onu_num = data.get('onu_num')
-
-#     if not port_base or not onu_num:
-#         return jsonify({'error': 'port_base/onu_num tidak ada di payload'}), 400
-
-#     lan_lock = data.get('lock')  # ambil sesuai nama key yg dikirim
-
-#     conn = get_db_connection()
-#     cursor = conn.cursor(dictionary=True)
-#     cursor.execute("SELECT * FROM table_olt WHERE id_olt = %s", (id_olt,))
-#     olt_data = cursor.fetchone()
-#     cursor.close()
-#     conn.close()
-
-#     if not olt_data:
-#         return jsonify({'error': 'OLT tidak ditemukan'}), 404
-
-#     result = asyncio.run(config_onu_telnet(
-#         olt_data,
-#         jenis_olt,
-#         port_base,
-#         onu_num,
-#         data.get('jenis_modem'),
-#         data.get('sn'),
-#         data.get('nama_pelanggan'),
-#         data.get('alamat'),
-#         data.get('upload_profile'),
-#         data.get('download_profile'),
-#         data.get('vlan'),
-#         data.get('pppoe_username'),
-#         data.get('pppoe_password'),
-#         lan_lock=lan_lock  # kirim ke fungsi telnet
-#     ))
-
-#     return jsonify({'status': 'ok', 'output': result})
-
 def generate_kode_psb():
     return "PSB" + ''.join(random.choices(string.digits, k=6))
 
@@ -562,3 +518,87 @@ def get_report_data():
         return jsonify(results), 200
     except Exception as e:
         return jsonify({'message': str(e)}), 500
+
+# --------------------------- CONFIG BRIDGE -----------------------------
+
+@main.route('/api/config_onu_bridge', methods=['POST'])
+def config_onu_bridge():
+    data = request.get_json(force=True)
+    current_app.logger.info(f"Payload diterima (Bridge): {data}")
+
+    id_olt    = data.get('id_olt')
+    jenis_olt = data.get('jenis_olt')
+    port_base = data.get('port_base')
+    onu_num   = data.get('onu_num')
+
+    if not port_base or not onu_num:
+        return jsonify({'error': 'port_base/onu_num tidak ada di payload'}), 400
+
+    # Ambil data OLT
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM table_olt WHERE id_olt = %s", (id_olt,))
+    olt_data = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    if not olt_data:
+        return jsonify({'error': 'OLT tidak ditemukan'}), 404
+
+    # Jalankan telnet config – pakai fungsi khusus bridge
+    try:
+        result = asyncio.run(config_onu_bridge_telnet(
+            olt_data,
+            jenis_olt,
+            port_base,
+            onu_num,
+            data.get('jenis_modem'),
+            data.get('sn'),
+            data.get('nama_pelanggan'),
+            data.get('alamat'),
+            data.get('upload_profile'),
+            data.get('download_profile'),
+            data.get('vlan')
+        ))
+        status = 'ok'
+    except Exception as e:
+        current_app.logger.error(f"Telnet Bridge gagal: {e}")
+        result = f"ERROR: {e}"
+        status = 'fail'
+
+    # Generate kode unik untuk bridge
+    import datetime, random
+    kode_psb = f"BRIDGE-{datetime.datetime.now().strftime('%Y%m%d')}-{random.randint(1000,9999)}"
+
+    # Simpan hasil ke tabel history
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO config_onu_history (
+            kode_psb, id_olt, jenis_olt, port_base, onu_num, jenis_modem, sn,
+            nama_pelanggan, alamat, upload_profile, download_profile, vlan,
+            pppoe_username, pppoe_password, lan_lock, status, created_at
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+    """, (
+        kode_psb,
+        id_olt,
+        jenis_olt,
+        port_base,
+        onu_num,
+        data.get('jenis_modem'),
+        data.get('sn'),
+        data.get('nama_pelanggan'),
+        data.get('alamat'),
+        data.get('upload_profile'),
+        data.get('download_profile'),
+        data.get('vlan'),
+        None,  # username PPPoE kosong
+        None,  # password PPPoE kosong
+        None,  # LAN lock kosong
+        'ok'
+    ))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'status': 'ok', 'kode_psb': kode_psb, 'output': result})
