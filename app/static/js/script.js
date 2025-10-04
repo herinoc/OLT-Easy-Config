@@ -1155,8 +1155,14 @@ function showReport() {
       <h1>Report</h1>
 
       <div class="card">
-        <div class="form-group">
-          <input type="text" id="searchReport" placeholder="Ketik kata kunci...">
+        <!-- Baris atas: search kiri, export kanan -->
+        <div class="report-header">
+          <div class="form-group">
+            <input type="text" id="searchReport" placeholder="Ketik kata kunci...">
+          </div>
+          <button id="exportExcelBtn">
+            📄 Export DOCX
+          </button>
         </div>
 
         <table id="reportTable">
@@ -1279,6 +1285,12 @@ function showReport() {
   });
 
   loadReportData();
+
+// ------------------------------ >> Button export << ----------------------------
+document.getElementById('exportExcelBtn').addEventListener('click', () => {
+  window.location.href = '/api/export_excel';
+});
+
 }
 
 // ----------------------------- CONFIG BRIDGE --------------------------

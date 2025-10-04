@@ -1,5 +1,5 @@
 # --------------------- IMPORT MODULE ---------------------------
-from flask import Blueprint, current_app, render_template, request, jsonify
+from flask import Blueprint, current_app, render_template, request, jsonify, send_file
 from app.models import get_all_olt_data
 from app.db import get_db_connection
 from app.olt.remote_olt import remote_telnet_to_olt
@@ -8,6 +8,9 @@ import asyncio
 from datetime import datetime
 import random, string
 from app.olt.remote_olt import telnet_show_uncfg_onu, telnet_show_onu_state, config_onu_telnet, config_onu_bridge_telnet
+from app.exporter import export_onu_history_to_excel
+import os
+
 
 # from app.olt.remote_olt import proses_limitasi
 # from app.olt.remote_olt import do_telnet, read_command  # pastikan impor sesuai lokasi kamu
@@ -602,3 +605,20 @@ def config_onu_bridge():
     conn.close()
 
     return jsonify({'status': 'ok', 'kode_psb': kode_psb, 'output': result})
+
+# --------------------- EXPORT KE EXCEL ---------------------------
+@main.route("/api/export_excel")
+def export_excel():
+    conn = None
+    buf = None
+    try:
+        conn = get_db_connection()
+        buf = export_onu_history_to_excel(conn)
+    except Exception as e:
+        current_app.logger.error(f"Export error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+    return send_file(buf, as_attachment=True, download_name="config_onu_history.xlsx")
+
